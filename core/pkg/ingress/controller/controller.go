@@ -62,6 +62,7 @@ const (
 	defServerName            = "_"
 	podStoreSyncedPollPeriod = 1 * time.Second
 	rootLocation             = "/"
+	nodeZoneKey              = "failure-domain.beta.kubernetes.io/zone"
 )
 
 var (
@@ -136,8 +137,9 @@ type Configuration struct {
 	// (for instance NGINX)
 	Backend ingress.Controller
 
-	UpdateStatus bool
-	ElectionID   string
+	UpdateStatus    bool
+	ElectionID      string
+	ActiveZoneLabel string
 }
 
 // newIngressController creates an Ingress controller
@@ -1047,6 +1049,7 @@ func (ic *GenericController) getEndpoints(
 			Port:        fmt.Sprintf("%v", targetPort),
 			MaxFails:    hz.MaxFails,
 			FailTimeout: hz.FailTimeout,
+			Backup:      false,
 		})
 	}
 
@@ -1082,25 +1085,81 @@ func (ic *GenericController) getEndpoints(
 				continue
 			}
 
+			backupEndpointsCount := 0
 			for _, epAddress := range ss.Addresses {
 				ep := fmt.Sprintf("%v:%v", epAddress.IP, targetPort)
 				if _, exists := adus[ep]; exists {
 					continue
 				}
+				nodeName := *epAddress.NodeName
+				backup := false
+
+				if ic.cfg.ActiveZoneLabel != "" {
+					backup = ic.isBackupNode(nodeName, s.Labels[ic.cfg.ActiveZoneLabel])
+					if backup {
+						backupEndpointsCount++
+					}
+				}
+
 				ups := ingress.Endpoint{
 					Address:     epAddress.IP,
 					Port:        fmt.Sprintf("%v", targetPort),
 					MaxFails:    hz.MaxFails,
 					FailTimeout: hz.FailTimeout,
+					Backup:      backup,
 				}
 				upsServers = append(upsServers, ups)
+
 				adus[ep] = true
+			}
+			if backupEndpointsCount == len(upsServers) {
+				revertedUpsServers := []ingress.Endpoint{}
+				for _, ups := range upsServers {
+					rups := ingress.Endpoint{
+						Address:     ups.Address,
+						Port:        ups.Port,
+						MaxFails:    ups.MaxFails,
+						FailTimeout: ups.FailTimeout,
+						Backup:      false,
+					}
+					revertedUpsServers = append(revertedUpsServers, rups)
+				}
+				glog.V(3).Infof("all of upstream servers marked as backup, revert them: %v", revertedUpsServers)
+				return revertedUpsServers
 			}
 		}
 	}
 
 	glog.V(3).Infof("endpoints found: %v", upsServers)
 	return upsServers
+}
+
+func (ic GenericController) getNodeLabels(nodeName string) (map[string]string, error) {
+	s, exists, err := ic.nodeLister.Store.GetByKey(nodeName)
+	node := s.(*api.Node)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	return node.GetLabels(), nil
+}
+
+func (ic GenericController) isBackupNode(nodeName string, activeZone string) bool {
+	labels, err := ic.getNodeLabels(nodeName)
+	if err != nil {
+		glog.Warningf("unexpected error obtaining node labels: %v", err)
+		return false
+	}
+	if activeZone == "" {
+		return false
+	}
+
+	return labels[nodeZoneKey] != activeZone
 }
 
 // extractSecretNames extracts information about secrets inside the Ingress rule

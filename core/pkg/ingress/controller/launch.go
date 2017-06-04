@@ -44,6 +44,11 @@ func NewIngressController(backend ingress.Controller) *GenericController {
 		ingressClass = flags.String("ingress-class", "",
 			`Name of the ingress class to route through this controller.`)
 
+		activeZoneLabel = flags.String("active-zone-label", "",
+			`Name of the service label that indicates active availability zone.
+		If value of the endpoint's node label 'failure-domain.beta.kubernetes.io/zone' isn't equals
+		value of observed service label, endpoint would be marked as backup.`)
+
 		configMap = flags.String("configmap", "",
 			`Name of the ConfigMap that contains the custom configuration to use`)
 
@@ -155,6 +160,7 @@ func NewIngressController(backend ingress.Controller) *GenericController {
 		DefaultService:          *defaultSvc,
 		IngressClass:            *ingressClass,
 		DefaultIngressClass:     backend.DefaultIngressClass(),
+		ActiveZoneLabel:         *activeZoneLabel,
 		Namespace:               *watchNamespace,
 		ConfigMapName:           *configMap,
 		TCPConfigMapName:        *tcpConfigMapName,

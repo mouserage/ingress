@@ -201,6 +201,8 @@ type Endpoint struct {
 	// of unsuccessful attempts to communicate with the server should happen
 	// to consider the endpoint unavailable
 	FailTimeout int `json:"failTimeout"`
+	// Backup indicates if endpoint is located not in preferred zone
+	Backup bool `json:"backup"`
 }
 
 // Server describes a website
